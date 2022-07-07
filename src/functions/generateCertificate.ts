@@ -1,4 +1,5 @@
 import { APIGatewayProxyHandler } from "aws-lambda";
+import { S3 } from "aws-sdk";
 import { document } from "../utils/dynamodbClient";
 import { compile } from "handlebars";
 import dayjs from "dayjs";
@@ -24,23 +25,13 @@ interface ITemplate {
 const compileTemplate = async (data: ITemplate) => {
     const filePath = join(process.cwd(), "src", "templates", "certificate.hbs");
 
-    const html = readFileSync(filePath, "utf-8");
+    const html = readFileSync(filePath, "utf8");
 
     return compile(html)(data);
 }
 
 export const handler: APIGatewayProxyHandler = async (event) => {
     const { id, name, grade } = JSON.parse(event.body) as ICreateCertificate;
-
-    document.put({
-        TableName: "users_certificate",
-        Item: {
-            id,
-            name,
-            grade,
-            created_at: new Date().getTime(),
-        }
-    }).promise();
 
     const response = await document.query({
         TableName: "users_certificate",
@@ -49,6 +40,20 @@ export const handler: APIGatewayProxyHandler = async (event) => {
             ":id": id
         }
     }).promise();
+
+    const userCertificateAlreadyExists = response.Items[0];
+
+    if(!userCertificateAlreadyExists) {
+        await document.put({
+            TableName: "users_certificate",
+            Item: {
+                id,
+                name,
+                grade,
+                created_at: new Date().getTime(),
+            }
+        }).promise();
+    }
 
     const medalPath = join(process.cwd(), "src", "templates", "selo.png");
     const medal = readFileSync(medalPath, "base64");
@@ -66,7 +71,6 @@ export const handler: APIGatewayProxyHandler = async (event) => {
         args: chromium.args,
         defaultViewport: chromium.defaultViewport,
         executablePath: await chromium.executablePath,
-        headless: chromium.headless
     });
 
     const page = await browser.newPage();
@@ -82,8 +86,21 @@ export const handler: APIGatewayProxyHandler = async (event) => {
 
     await browser.close();
 
+    const s3 = new S3();
+
+    await s3.putObject({
+        Bucket: "ignite-certificate-serverless-dev",
+        Key: `${id}.pdf`,
+        ACL: "public-read",
+        Body: pdf,
+        ContentType: "application/pdf"
+    }).promise();
+
     return {
         statusCode: 201,
-        body: JSON.stringify(response.Items[0])
+        body: JSON.stringify({
+            message: "Certificated created successfully!",
+            url: `https://ignite-certificate-serverless-dev.s3.amazonaws.com/${id}.pdf`
+        })
     };
 } 
